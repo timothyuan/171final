@@ -65,8 +65,11 @@ def communication(s):
                 print('transactions:', transactions)
                 for t in transactions:
                     fields = t.strip()[1:-1].split('-')
+                    if fields[0] == pid:
+                        balance -= int(fields[2])
+                        pending.clear()
                     if fields[1] == pid:
-                        balance += int(fields[2])
+                        balance -= int(fields[2])
                 promises.clear()
                 acceptances = 0
                 ballotNum = (0, pid, 0)
@@ -180,7 +183,9 @@ def processing(s):
                     fields = t.strip()[1:-1].split('-')
                     if fields[0] == pid:
                         balance -= int(fields[2])
-                pending.clear()
+                        pending.clear()
+                    if fields[1] == pid:
+                        balance -= int(fields[2])
                 promises.clear()
                 acceptances = 0
                 ballotNum = (0, pid, 0)
