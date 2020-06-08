@@ -25,9 +25,11 @@ def communication(s):
             if not connections[addr]:
                 continue
             if type == 'prepare':
-                # prepare/ballotnum/depth
-                print('Received prepare:', event)
+                # prepare/ballotnum/pid/depth
                 bal = (int(event[1]),event[2],int(event[3]))
+                if bal[2] < len(chain):
+                    continue
+                print('Received prepare:', event)
                 if bal >= ballot:
                     # ballot number less than received ballot number
                     print(bal, ballot)
@@ -35,30 +37,34 @@ def communication(s):
                     reply = 'promise/{}/{}/{}/{}/{}/{}/{}'.format(ballot[0], ballot[1], ballot[2],acceptNum[0], acceptNum[1], acceptNum[2], acceptVal)
                     threading.Thread(target = send, args = [s, reply, addr]).start()
             elif type == 'promise':
-                print('Received promise:', event)
                 # promise/ballotnum/pid/depth/acceptnum/acceptpid/acceptdepth/acceptval
                 bal = (int(event[1]),event[2],int(event[3]))
                 if ballot!=bal:
                     # ignore different ballot numbers
                     continue
                 promises.append(event)
+                print('Received promise:', event)
             elif type == 'accept':
-                # accept/ballotnum/depth/acceptVal
-                print('Received accept:', event)
+                # accept/ballotnum/pid/depth/acceptVal
                 bal = (int(event[1]),event[2],int(event[3]))
+                if bal[2] < len(chain):
+                    continue
                 if bal >= ballot:
                     acceptNum = bal
                     acceptVal = event[4]
                     reply = 'accepted/{}/{}/{}'.format(bal[0], bal[1], acceptVal)
                     threading.Thread(target = send, args = [s, reply, addr]).start()
+                print('Received accept:', event)
             elif type == 'accepted':
                 # accepted/ballotnum/depth/acceptVal
                 print('Received accepted:', event)
                 acceptances+=1
             elif type == 'decide':
-                # decide/ballotnum/acceptVal
+                # decide/ballotnum/depth/acceptVal
+                if int(event[2]) < len(chain):
+                    continue
                 print('Received decide:', event)
-                acceptVal = event[2]
+                acceptVal = event[3]
                 chain.append(acceptVal.split('||'))
                 transactions = acceptVal.split('||')[0]
                 transactions = transactions[1:-1].split(',')
@@ -69,18 +75,18 @@ def communication(s):
                         balance -= int(fields[2])
                         pending.clear()
                     if fields[1] == pid:
-                        balance -= int(fields[2])
+                        balance += int(fields[2])
                 promises.clear()
                 acceptances = 0
-                ballotNum = (0, pid, 0)
+                ballot = (0, pid, len(chain))
                 acceptNum = (0, '', 0)
-                acceptVal = None
+                acceptVal = 'None'
 
 def processing(s):
     global ports, pid, balance, chain, transfers, pending, promises, acceptances, ballot, acceptVal, acceptNum, lock
     while True:
         with lock:
-            if len(transfers) == 0 and len(pending) == 0 and acceptVal == None:
+            if len(transfers) == 0 and len(pending) == 0 and acceptVal == 'None':
                 continue
 
         # timeout before sending prepare messages
@@ -95,7 +101,7 @@ def processing(s):
                 transfers.clear()
 
             with lock:
-                if len(pending) == 0 and acceptVal == None:
+                if len(pending) == 0 and acceptVal == 'None':
                     break
             # random paxos wait
             sleep(randint(0,5))
@@ -105,16 +111,15 @@ def processing(s):
                 # clear acceptances
                 acceptances = 0
                 # increment ballot
-                ballot = (ballot[0]+1, ballot[1], len(chain))
+                ballot = (ballot[0]+1, pid, len(chain))
 
                 # send prepare messages
                 # prepare/ballotnum/pid/depth
                 msg = 'prepare/{}/{}/{}'.format(ballot[0], ballot[1], ballot[2])
-
+                print('Sending prepare:', msg)
                 for p in ports:
                     if p != pid:
                         addr = ('127.0.0.1', ports[p])
-                        print('Sending prepare:', msg)
                         threading.Thread(target = send, args = [s, msg, addr]).start()
 
             # wait to receive promises
@@ -133,10 +138,10 @@ def processing(s):
                     prevHash = sha256(prevHash.encode('utf-8')).hexdigest()
                     while True:
                         nonce = str(randint(0, 50))
-                        h = '{}||{}'.format(pending, nonce)
+                        h = '{}||{}||{}'.format(pending, nonce, prevHash)
                         hash = sha256(h.encode('utf-8')).hexdigest()
                         if '0' <= hash[-1] <= '4':
-                            acceptVal = '{}||{}'.format(h, prevHash)
+                            acceptVal = h
                             print('Nonce:', nonce)
                             print('Hash value:', hash)
                             print('acceptVal:', acceptVal)
@@ -151,10 +156,10 @@ def processing(s):
                 # send accept messages
                 # accept/ballotnum/pid/depth/acceptVal
                 msg = 'accept/{}/{}/{}/{}'.format(ballot[0], ballot[1], ballot[2], acceptVal)
+                print('Sending accept:', msg)
                 for p in ports:
                     if p != pid:
                         addr = ('127.0.0.1', ports[p])
-                        print('Sending accept:', msg)
                         threading.Thread(target = send, args = [s, msg, addr]).start()
 
             # wait to receive acceptances
@@ -168,7 +173,7 @@ def processing(s):
             # DECIDE
             with lock:
                 # decide/ballotNum/acceptVal
-                msg = 'decide/{}/{}'.format(ballot[0], acceptVal)
+                msg = 'decide/{}/{}/{}'.format(ballot[0], ballot[2], acceptVal)
                 print('SENDING DECIDE TO ALL PROCESSES')
                 print(acceptVal)
                 for p in ports:
@@ -185,12 +190,12 @@ def processing(s):
                         balance -= int(fields[2])
                         pending.clear()
                     if fields[1] == pid:
-                        balance -= int(fields[2])
+                        balance += int(fields[2])
                 promises.clear()
                 acceptances = 0
-                ballotNum = (0, pid, 0)
+                ballot = (0, pid, len(chain))
                 acceptNum = (0, '', 0)
-                acceptVal = None
+                acceptVal = 'None'
                 break
 
 
@@ -208,8 +213,8 @@ def main():
         ('127.0.0.1', 3000): True,
         ('127.0.0.1', 3001): True,
         ('127.0.0.1', 3002): True,
-        ('127.0.0.1', 3003): False,
-        ('127.0.0.1', 3004): False
+        ('127.0.0.1', 3003): True,
+        ('127.0.0.1', 3004): True
     }
     pid = sys.argv[1]
     balance = 100
@@ -222,7 +227,7 @@ def main():
     ballot = (0,pid, 0)
     # ballotnum, depth
     acceptNum = (0,'',0)
-    acceptVal = None
+    acceptVal = 'None'
     lock = threading.Lock()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(('127.0.0.1', ports[pid]))
